@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use std::{error::Error, fs};
 
-use csv::Writer;
+use csv::WriterBuilder;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::value::Value;
@@ -11,7 +11,7 @@ use tokio;
 struct Book {
     author: String,
     title: String,
-    subjects: Vec<String>,
+    subjects: String,
     pages: Option<i64>,
     open_work_key: String,
     open_edition_key: String,
@@ -43,10 +43,11 @@ async fn main() {
     export_file("ouput.csv", data).expect("fail writing");
 }
 
-fn read_temp_file_keys(filename: &str) -> Result<Vec<String>, Box<dyn Error>> {
-    let file = fs::read_to_string(filename).expect("failed to read temp file");
+fn read_temp_file_keys() -> Result<Vec<String>, Box<dyn Error>> {
+    let file = fs::read_to_string("resources/temp_output_dumas.csv").expect("failed to read temp file");
 
     let mut contents = csv::ReaderBuilder::new()
+        .delimiter(b';')
         .has_headers(false)
         .from_reader(file.as_bytes());
 
@@ -69,9 +70,13 @@ async fn process_file(
         .has_headers(false)
         .from_reader(file.as_bytes());
 
-    let temp_file_keys = read_temp_file_keys(temp_output_filename).expect("get keys ok");
+    let temp_file_keys = read_temp_file_keys().expect("get keys ok");
 
-    let mut wtr = Writer::from_path(temp_output_filename)?;
+    let mut wtr = WriterBuilder::new()
+        .delimiter(b';')
+        .has_headers(false)
+        .flexible(true)
+        .from_path(temp_output_filename)?;
 
     let mut output = vec![];
     for result in contents.deserialize() {
@@ -88,6 +93,16 @@ async fn process_file(
 
 async fn convert_input(input: &InputBook) -> Result<Book, Box<dyn Error>> {
     let key = get_book_key(input).await?;
+    if key.work_key.eq("") {
+        return Ok(Book {
+            title: key.title.to_string(),
+            author: key.author.to_string(),
+            subjects: "".to_string(),
+            pages: None,
+            open_work_key: key.work_key.to_string(),
+            open_edition_key: key.edition_key.to_string(),
+        })
+    }
     get_book(&key).await
 }
 
@@ -108,12 +123,22 @@ async fn get_book_key(input: &InputBook) -> Result<Key, Box<dyn Error>> {
     println!("url for getting key: {:?}", request_url);
     let response = reqwest::get(&request_url).await?;
     let json: Value = response.json().await?;
-    let key_value = &json["docs"].as_array().unwrap()[0];
-    let work_key = key_value["key"]
+
+    let key_value = &json["docs"].as_array().unwrap();
+    if key_value.is_empty() {
+        return Ok(Key {
+            title: input.title.to_string(),
+            author: input.author.to_string(),
+            work_key: "".to_string(),
+            edition_key: "".to_string(),
+        });
+    }
+
+    let work_key = key_value[0]["key"]
         .as_str()
         .expect(&format!("fail on work_key title: {:?}", &input.title))
         .to_string();
-    let edition_key = key_value["edition_key"].as_array().unwrap()[0]
+    let edition_key = key_value[0]["edition_key"].as_array().unwrap()[0]
         .as_str()
         .expect(&format!("fail on work_key title: {:?}", &input.title))
         .to_string();
@@ -133,22 +158,12 @@ async fn get_book(key: &Key) -> Result<Book, Box<dyn Error>> {
     let response = reqwest::get(&request_url).await?;
     let json: Value = response.json().await?;
 
-    let subjects_value = json["subjects"].as_array();
-
-    let subjects = match subjects_value {
-        None => vec![],
-        Some(x) => x
-            .into_iter()
-            .map(|x| x.to_string())
-            .collect::<Vec<String>>(),
-    };
-
     let pages = get_pages(&key.edition_key).await?;
 
     Ok(Book {
         title: key.title.to_string(),
         author: key.author.to_string(),
-        subjects,
+        subjects: json["subjects"].to_string(),
         pages,
         open_work_key: key.work_key.to_string(),
         open_edition_key: key.edition_key.to_string(),
@@ -172,7 +187,7 @@ fn query_title(title: &str) -> String {
 }
 
 fn export_file(filename: &str, records: Vec<Book>) -> Result<(), Box<dyn Error>> {
-    let mut wtr = Writer::from_path(filename)?;
+    let mut wtr = WriterBuilder::new().from_path(filename)?;
     for record in records {
         wtr.serialize(record)?;
     }
