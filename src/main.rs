@@ -35,16 +35,29 @@ struct InputBook {
     period: String,
 }
 
-#[tokio::main]
-async fn main() {
-    let data = process_file("resources/1001books.csv", "resources/temp_output")
-        .await
-        .expect("fail on read");
-    export_file("ouput.csv", data).expect("fail writing");
+struct Config {
+    input_filename: String,
+    output_filename: String,
+    temp_in_filename: String,
+    temp_out_filename: String
 }
 
-fn read_temp_file_keys() -> Result<Vec<String>, Box<dyn Error>> {
-    let file = fs::read_to_string("resources/temp_output_dumas.csv").expect("failed to read temp file");
+#[tokio::main]
+async fn main() {
+    let config = Config{
+        input_filename: "resources/1001books.csv".to_string(),
+        output_filename: "resources/output.csv".to_string(),
+        temp_in_filename: "resources/temp_input.csv".to_string(),
+        temp_out_filename: "resources/temp_output.csv".to_string()
+    };
+    let data = process_file(&config)
+        .await
+        .expect("fail on read");
+    export_file(&config.output_filename, data).expect("fail writing");
+}
+
+fn read_temp_file_keys(temp_filename: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    let file = fs::read_to_string(temp_filename).expect("failed to read temp file");
 
     let mut contents = csv::ReaderBuilder::new()
         .delimiter(b';')
@@ -61,22 +74,21 @@ fn read_temp_file_keys() -> Result<Vec<String>, Box<dyn Error>> {
 }
 
 async fn process_file(
-    filename: &str,
-    temp_output_filename: &str,
+    config: &Config
 ) -> Result<Vec<Book>, Box<dyn Error>> {
-    let file = fs::read_to_string(filename).expect("failed to read file");
+    let file = fs::read_to_string(&config.input_filename).expect("failed to read file");
 
     let mut contents = csv::ReaderBuilder::new()
         .has_headers(false)
         .from_reader(file.as_bytes());
 
-    let temp_file_keys = read_temp_file_keys().expect("get keys ok");
+    let temp_file_keys = read_temp_file_keys(&config.temp_in_filename).expect("get keys ok");
 
     let mut wtr = WriterBuilder::new()
         .delimiter(b';')
         .has_headers(false)
         .flexible(true)
-        .from_path(temp_output_filename)?;
+        .from_path(&config.temp_out_filename)?;
 
     let mut output = vec![];
     for result in contents.deserialize() {
@@ -86,6 +98,7 @@ async fn process_file(
             wtr.serialize(output_record.borrow())?;
             output.push(output_record);
         }
+        wtr.flush()?;
     }
     wtr.flush()?;
     Ok(output)
@@ -114,10 +127,12 @@ struct Key {
 }
 
 async fn get_book_key(input: &InputBook) -> Result<Key, Box<dyn Error>> {
-    let converted_title = query_title(&input.title);
+    let converted_title = query_string(&input.title);
+    let converted_author = query_string(&input.author);
     let request_url = format!(
-        "https://openlibrary.org/search.json?title={title}&fields=key,edition_key&limit=1",
-        title = converted_title
+        "https://openlibrary.org/search.json?title={title}&author={author}&fields=key,edition_key&limit=1",
+        title = converted_title,
+        author = converted_author
     );
 
     println!("url for getting key: {:?}", request_url);
@@ -178,8 +193,8 @@ async fn get_pages(key: &str) -> Result<Option<i64>, Box<dyn Error>> {
     Ok(json["number_of_pages"].as_i64())
 }
 
-fn query_title(title: &str) -> String {
-    title
+fn query_string(input: &str) -> String {
+    input
         .to_lowercase()
         .replace(" ", "+")
         .replace("'", "")
