@@ -153,10 +153,13 @@ async fn get_book_key(input: &InputBook) -> Result<Key, Box<dyn Error>> {
         .as_str()
         .expect(&format!("fail on work_key title: {:?}", &input.title))
         .to_string();
-    let edition_key = key_value[0]["edition_key"].as_array().unwrap()[0]
+    let edition_key = match key_value[0]["edition_key"].as_array() {
+        Some(s) => s[0]
         .as_str()
         .expect(&format!("fail on work_key title: {:?}", &input.title))
-        .to_string();
+        .to_string(),
+        None => "".to_string()
+    };
 
     Ok(Key {
         title: input.title.to_string(),
